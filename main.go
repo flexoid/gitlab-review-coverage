@@ -16,8 +16,11 @@ import (
 
 const defaultBoltDataPath = "/tmp/gitlab-mr-coverage.db"
 const defaultPort = "4040"
+const gitlabBaseURL = "https://gitlab.monterosa.co.uk"
+const gitlabToken = "sometoken"
 
 var db *bolt.DB
+var git *gitlab.Client
 
 func main() {
 	zerolog.TimeFieldFormat = ""
@@ -26,6 +29,7 @@ func main() {
 	log.Info().Msg("Gitlab Merge Request Coverage reporter")
 
 	db = prepareDatabase(defaultBoltDataPath)
+	git = prepareGitlabClient(gitlabBaseURL, gitlabToken)
 
 	port := os.Getenv("PORT")
 	if len(port) == 0 {
@@ -57,6 +61,17 @@ func prepareDatabase(boltDataPath string) *bolt.DB {
 	log.Info().Msgf("BoltDB data file path: %s", db.Path())
 
 	return db
+}
+
+func prepareGitlabClient(gitlabBaseURL, gitlabToken string) *gitlab.Client {
+	git := gitlab.NewClient(nil, gitlabToken)
+
+	err := git.SetBaseURL(gitlabBaseURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Setting base gitlab URL failed")
+	}
+
+	return git
 }
 
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
