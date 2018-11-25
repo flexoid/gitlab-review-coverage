@@ -1,14 +1,23 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/xanzy/go-gitlab"
+	"go.etcd.io/bbolt"
 	"io/ioutil"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 )
+
+const defaultBoltDataPath = "/tmp/gitlab-mr-coverage.db"
+const defaultPort = "4040"
+
+var db *bolt.DB
 
 func main() {
 	zerolog.TimeFieldFormat = ""
@@ -16,11 +25,12 @@ func main() {
 
 	log.Info().Msg("Gitlab Merge Request Coverage reporter")
 
+	db = prepareDatabase(defaultBoltDataPath)
+
 	port := os.Getenv("PORT")
 	if len(port) == 0 {
-		port = "4040"
+		port = defaultPort
 	}
-	log.Debug().Msg("Received webhook request")
 
 	startWebhookListener(port)
 }
@@ -35,6 +45,18 @@ func startWebhookListener(port string) {
 		log.Fatal().Err(err).Msgf("Failed to start webhook listener")
 	}
 
+}
+
+func prepareDatabase(boltDataPath string) *bolt.DB {
+	db, err := bolt.Open(boltDataPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
+
+	if err != nil {
+		log.Fatal().Err(err).Msgf("Failed to open BoltDB file %s", boltDataPath)
+	}
+
+	log.Info().Msgf("BoltDB data file path: %s", db.Path())
+
+	return db
 }
 
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +74,20 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		log.Error().Err(err).Msg("Webhook cannot be parsed")
 		return
 	}
+
+	db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte("events"))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+
+		id, _ := bucket.NextSequence()
+		buf, _ := json.Marshal(event)
+
+		bucket.Put([]byte(strconv.FormatUint(id, 10)), buf)
+
+		return nil
+	})
 
 	switch event := event.(type) {
 	case *gitlab.MergeEvent:
