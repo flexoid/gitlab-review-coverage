@@ -107,13 +107,18 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	switch event := event.(type) {
 	case *gitlab.MergeEvent:
 		handleMergeRequestEvent(event)
+	case *gitlab.BuildEvent:
+		handleBuildEvent(event)
 	default:
-		log.Debug().Msg("Skipping")
+		log.Debug().Msg("Skipping event type")
 	}
 }
 
 func handleMergeRequestEvent(event *gitlab.MergeEvent) {
+	projectID := event.ObjectAttributes.TargetProjectID
+
 	log := log.With().
+		Int("project_id", projectID).
 		Int("merge_request", event.ObjectAttributes.IID).
 		Logger()
 
@@ -121,16 +126,7 @@ func handleMergeRequestEvent(event *gitlab.MergeEvent) {
 		Interface("event", event).
 		Msg("Merge request event received")
 
-	projectID := event.ObjectAttributes.TargetProjectID
 	lastCommitSHA := event.ObjectAttributes.LastCommit.ID
-
-	git := gitlab.NewClient(nil, "sometoken")
-
-	err := git.SetBaseURL("https://gitlab.monterosa.co.uk")
-	if err != nil {
-		log.Error().Err(err).Msg("Setting base gitlab URL failed")
-		return
-	}
 
 	noteOpts := &gitlab.CreateMergeRequestNoteOptions{
 		Body: gitlab.String(fmt.Sprintf("Detected last commit: %s", lastCommitSHA)),
@@ -145,4 +141,57 @@ func handleMergeRequestEvent(event *gitlab.MergeEvent) {
 	log.Info().
 		Interface("note", note).
 		Msg("Note created")
+}
+
+func handleBuildEvent(event *gitlab.BuildEvent) {
+	projectID := event.ProjectID
+	jobID := event.BuildID
+	sha := event.Sha
+
+	log := log.With().
+		Int("project_id", projectID).
+		Int("job", jobID).
+		Str("sha", sha).
+		Logger()
+
+	log.Debug().
+		Interface("event", event).
+		Msg("Build event received")
+
+	if event.BuildStatus != "success" {
+		log.Debug().
+			Str("status", event.BuildStatus).
+			Msg("Skipping as status is not success")
+
+		return
+	}
+
+	err := storeJobData(projectID, jobID, sha)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to store job data")
+	}
+
+	log.Info().Msg("Job stored")
+}
+
+func storeJobData(projectID int, jobID int, sha string) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		projectBucket, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("projects:%d", projectID)))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+
+		jobBucket, err := projectBucket.CreateBucketIfNotExists([]byte(fmt.Sprintf("job:%s", sha)))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+
+		seqID, _ := jobBucket.NextSequence()
+		err = jobBucket.Put([]byte(strconv.FormatUint(seqID, 10)), []byte(strconv.Itoa(jobID)))
+		if err != nil {
+			return fmt.Errorf("storing job ID: %s", err)
+		}
+
+		return nil
+	})
 }
