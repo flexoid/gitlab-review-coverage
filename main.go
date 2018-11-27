@@ -154,6 +154,49 @@ func handleBuildEvent(event *gitlab.BuildEvent) {
 
 		return
 	}
+
+	go handleCommitCoverage(projectID, event, &log)
+}
+
+func handleCommitCoverage(projectID int, event *gitlab.BuildEvent, log *zerolog.Logger) {
+	job, _, err := git.Jobs.GetJob(projectID, event.BuildID)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to fetch job")
+		return
+	}
+
+	coverage := job.Coverage
+	log.Debug().Float64("coverage", coverage).Msg("Received job coverage")
+
+	if coverage == 0 {
+		return
+	}
+
+	err = storeCommitCoverage(projectID, event.Sha, coverage)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to store commit coverage")
+		return
+	}
+
+	log.Info().Float64("coverage", coverage).Msg("Coverage is stored")
+}
+
+func storeCommitCoverage(projectID int, sha string, coverage float64) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		projectBucket, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("projects:%d", projectID)))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+
+		coverageStr := strconv.FormatFloat(coverage, 'f', -1, 64)
+		err = projectBucket.Put([]byte(fmt.Sprintf("sha:%s", sha)), []byte(coverageStr))
+
+		if err != nil {
+			return fmt.Errorf("store commit coverage error: %s", err)
+		}
+
+		return nil
+	})
 }
 
 func processMergeRequest(projectID int, mergeRequestID int, log *zerolog.Logger) {
