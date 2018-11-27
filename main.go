@@ -129,13 +129,7 @@ func handleMergeRequestEvent(event *gitlab.MergeEvent) {
 		Interface("event", event).
 		Msg("Merge request event received")
 
-	err := storeMergeRequestData(projectID, mergeRequestID, lastCommitSHA)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to store merge request data")
-		return
-	}
-
-	log.Info().Msg("Merge request stored")
+	go processMergeRequest(projectID, mergeRequestID, &log)
 }
 
 func handleBuildEvent(event *gitlab.BuildEvent) {
@@ -160,39 +154,29 @@ func handleBuildEvent(event *gitlab.BuildEvent) {
 
 		return
 	}
+}
 
-	err := storeJobData(projectID, jobID, sha)
+func processMergeRequest(projectID int, mergeRequestID int, log *zerolog.Logger) {
+	commits, _, err := git.MergeRequests.GetMergeRequestCommits(projectID, mergeRequestID, nil)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to store job data")
+		log.Error().Err(err).Msg("Failed to fetch merge request commits")
 		return
 	}
 
-	log.Info().Msg("Job stored")
+	firstCommit := commits[len(commits)-1]
+	lastCommit := commits[0]
+	commitBeforeMergeRequestSHA := firstCommit.ParentIDs[0]
+
+	err = storeMergeRequestData(projectID, mergeRequestID, commitBeforeMergeRequestSHA, lastCommit.ID)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to store merge request data")
+		return
+	}
+
+	log.Info().Msg("Merge request stored")
 }
 
-func storeJobData(projectID int, jobID int, sha string) error {
-	return db.Update(func(tx *bolt.Tx) error {
-		projectBucket, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("projects:%d", projectID)))
-		if err != nil {
-			return fmt.Errorf("create bucket: %s", err)
-		}
-
-		jobBucket, err := projectBucket.CreateBucketIfNotExists([]byte(fmt.Sprintf("job:%s", sha)))
-		if err != nil {
-			return fmt.Errorf("create bucket: %s", err)
-		}
-
-		seqID, _ := jobBucket.NextSequence()
-		err = jobBucket.Put([]byte(strconv.FormatUint(seqID, 10)), []byte(strconv.Itoa(jobID)))
-		if err != nil {
-			return fmt.Errorf("storing job ID: %s", err)
-		}
-
-		return nil
-	})
-}
-
-func storeMergeRequestData(projectID int, mergeRequestID int, lastCommitSHA string) error {
+func storeMergeRequestData(projectID int, mergeRequestID int, beforeCommitSHA, lastCommitSHA string) error {
 	return db.Update(func(tx *bolt.Tx) error {
 		projectBucket, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("projects:%d", projectID)))
 		if err != nil {
@@ -205,7 +189,12 @@ func storeMergeRequestData(projectID int, mergeRequestID int, lastCommitSHA stri
 			return fmt.Errorf("create bucket: %s", err)
 		}
 
-		err = mergeRequestBucket.Put([]byte("sha"), []byte(lastCommitSHA))
+		err = mergeRequestBucket.Put([]byte("beforeSHA"), []byte(beforeCommitSHA))
+		if err != nil {
+			return fmt.Errorf("storing before commit SHA: %s", err)
+		}
+
+		err = mergeRequestBucket.Put([]byte("lastCommitSHA"), []byte(lastCommitSHA))
 		if err != nil {
 			return fmt.Errorf("storing last commit SHA: %s", err)
 		}
