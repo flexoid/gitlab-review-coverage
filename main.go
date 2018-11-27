@@ -116,31 +116,26 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 
 func handleMergeRequestEvent(event *gitlab.MergeEvent) {
 	projectID := event.ObjectAttributes.TargetProjectID
+	mergeRequestID := event.ObjectAttributes.IID
+	lastCommitSHA := event.ObjectAttributes.LastCommit.ID
 
 	log := log.With().
 		Int("project_id", projectID).
-		Int("merge_request", event.ObjectAttributes.IID).
+		Int("merge_request_id", mergeRequestID).
+		Str("sha", lastCommitSHA).
 		Logger()
 
-	log.Info().
+	log.Debug().
 		Interface("event", event).
 		Msg("Merge request event received")
 
-	lastCommitSHA := event.ObjectAttributes.LastCommit.ID
-
-	noteOpts := &gitlab.CreateMergeRequestNoteOptions{
-		Body: gitlab.String(fmt.Sprintf("Detected last commit: %s", lastCommitSHA)),
-	}
-
-	note, _, err := git.Notes.CreateMergeRequestNote(projectID, event.ObjectAttributes.IID, noteOpts)
-
+	err := storeMergeRequestData(projectID, mergeRequestID, lastCommitSHA)
 	if err != nil {
-		log.Error().Err(err).Msg("Cannot create note on merge request")
+		log.Error().Err(err).Msg("Failed to store merge request data")
+		return
 	}
 
-	log.Info().
-		Interface("note", note).
-		Msg("Note created")
+	log.Info().Msg("Merge request stored")
 }
 
 func handleBuildEvent(event *gitlab.BuildEvent) {
@@ -169,6 +164,7 @@ func handleBuildEvent(event *gitlab.BuildEvent) {
 	err := storeJobData(projectID, jobID, sha)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to store job data")
+		return
 	}
 
 	log.Info().Msg("Job stored")
@@ -190,6 +186,28 @@ func storeJobData(projectID int, jobID int, sha string) error {
 		err = jobBucket.Put([]byte(strconv.FormatUint(seqID, 10)), []byte(strconv.Itoa(jobID)))
 		if err != nil {
 			return fmt.Errorf("storing job ID: %s", err)
+		}
+
+		return nil
+	})
+}
+
+func storeMergeRequestData(projectID int, mergeRequestID int, lastCommitSHA string) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		projectBucket, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("projects:%d", projectID)))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+
+		mergeRequestBucket, err := projectBucket.
+			CreateBucketIfNotExists([]byte(fmt.Sprintf("mr:%d", mergeRequestID)))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+
+		err = mergeRequestBucket.Put([]byte("sha"), []byte(lastCommitSHA))
+		if err != nil {
+			return fmt.Errorf("storing last commit SHA: %s", err)
 		}
 
 		return nil
