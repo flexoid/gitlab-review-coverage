@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -89,20 +88,6 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		log.Error().Err(err).Msg("Webhook cannot be parsed")
 		return
 	}
-
-	db.Update(func(tx *bolt.Tx) error {
-		bucket, err := tx.CreateBucketIfNotExists([]byte("events"))
-		if err != nil {
-			return fmt.Errorf("create bucket: %s", err)
-		}
-
-		id, _ := bucket.NextSequence()
-		buf, _ := json.Marshal(event)
-
-		bucket.Put([]byte(strconv.FormatUint(id, 10)), buf)
-
-		return nil
-	})
 
 	switch event := event.(type) {
 	case *gitlab.MergeEvent:
