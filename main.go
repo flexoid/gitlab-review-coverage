@@ -13,11 +13,6 @@ import (
 	"time"
 )
 
-const defaultBoltDataPath = "/tmp/gitlab-mr-coverage.db"
-const defaultPort = "4040"
-const gitlabBaseURL = "https://gitlab.monterosa.co.uk"
-const gitlabToken = "sometoken"
-
 var db *bolt.DB
 var git *gitlab.Client
 
@@ -27,15 +22,23 @@ func main() {
 
 	log.Info().Msg("Gitlab Merge Request Coverage reporter")
 
-	db = prepareDatabase(defaultBoltDataPath)
+	port := getRequiredEnvVar("PORT")
+	gitlabBaseURL := getRequiredEnvVar("GITLAB_BASE_URL")
+	gitlabToken := getRequiredEnvVar("GITLAB_TOKEN")
+	boltDBPath := getRequiredEnvVar("BOLT_DB_PATH")
+
+	db = prepareDatabase(boltDBPath)
 	git = prepareGitlabClient(gitlabBaseURL, gitlabToken)
 
-	port := os.Getenv("PORT")
-	if len(port) == 0 {
-		port = defaultPort
-	}
-
 	startWebhookListener(port)
+}
+
+func getRequiredEnvVar(varName string) string {
+	envVar := os.Getenv(varName)
+	if len(envVar) == 0 {
+		log.Fatal().Msgf("Expected ENV variable set: %s", varName)
+	}
+	return envVar
 }
 
 func startWebhookListener(port string) {
