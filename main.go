@@ -172,20 +172,48 @@ func handleCommitCoverage(projectID int, event *gitlab.BuildEvent, log *zerolog.
 }
 
 func storeCommitCoverage(projectID int, sha string, coverage float64) error {
-	return db.Update(func(tx *bolt.Tx) error {
-		projectBucket, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("projects:%d", projectID)))
-		if err != nil {
-			return fmt.Errorf("create bucket: %s", err)
-		}
-
+	return storeCommitData(projectID, sha, func(bucket *bolt.Bucket) error {
 		coverageStr := strconv.FormatFloat(coverage, 'f', -1, 64)
-		err = projectBucket.Put([]byte(fmt.Sprintf("sha:%s", sha)), []byte(coverageStr))
+		err := bucket.Put([]byte("coverage"), []byte(coverageStr))
 
 		if err != nil {
 			return fmt.Errorf("store commit coverage error: %s", err)
 		}
 
 		return nil
+	})
+}
+
+func storeMergeRequestToCommitLink(projectID int, mergeRequestID int, lastCommitSHA string) error {
+	return storeCommitData(projectID, lastCommitSHA, func(commitBucket *bolt.Bucket) error {
+		mergeRequestIDsBucket, err := commitBucket.CreateBucketIfNotExists([]byte("mrs"))
+		if err != nil {
+			return fmt.Errorf("create merge request IDs bucket error: %s", err)
+		}
+
+		// Only keys matter here, so put zero byte as value
+		err = mergeRequestIDsBucket.Put([]byte(strconv.Itoa(mergeRequestID)), []byte("\x00"))
+		if err != nil {
+			return fmt.Errorf("store merge request ID into commit error: %s", err)
+		}
+
+		return nil
+	})
+}
+
+func storeCommitData(projectID int, sha string, storeFn func(*bolt.Bucket) error) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		projectBucket, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("projects:%d", projectID)))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+
+		commitBucket, err := projectBucket.CreateBucketIfNotExists([]byte(fmt.Sprintf("sha:%s", sha)))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+
+		return storeFn(commitBucket)
 	})
 }
 
@@ -203,6 +231,12 @@ func processMergeRequest(projectID int, mergeRequestID int, log *zerolog.Logger)
 	err = storeMergeRequestData(projectID, mergeRequestID, commitBeforeMergeRequestSHA, lastCommit.ID)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to store merge request data")
+		return
+	}
+
+	err = storeMergeRequestToCommitLink(projectID, mergeRequestID, lastCommit.ID)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to store merge request to commit link")
 		return
 	}
 
