@@ -27,6 +27,8 @@ func main() {
 	gitlabToken := getRequiredEnvVar("GITLAB_TOKEN")
 	boltDBPath := getRequiredEnvVar("BOLT_DB_PATH")
 
+	log.Info().Msgf("Working with GitLab: %s", gitlabBaseURL)
+
 	db = prepareDatabase(boltDBPath)
 	git = prepareGitlabClient(gitlabBaseURL, gitlabToken)
 
