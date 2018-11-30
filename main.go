@@ -241,9 +241,184 @@ func processMergeRequest(projectID int, mergeRequestID int, log *zerolog.Logger)
 	}
 
 	log.Info().Msg("Merge request stored")
+
+	handleDiscussionPosting(projectID, mergeRequestID, commitBeforeMergeRequestSHA, lastCommit.ID, log)
 }
 
 func storeMergeRequestData(projectID int, mergeRequestID int, beforeCommitSHA, lastCommitSHA string) error {
+	return storeInMergeRequestBucket(projectID, mergeRequestID, func(mergeRequestBucket *bolt.Bucket) error {
+		err := mergeRequestBucket.Put([]byte("beforeSHA"), []byte(beforeCommitSHA))
+		if err != nil {
+			return fmt.Errorf("storing before commit SHA: %s", err)
+		}
+
+		err = mergeRequestBucket.Put([]byte("lastCommitSHA"), []byte(lastCommitSHA))
+		if err != nil {
+			return fmt.Errorf("storing last commit SHA: %s", err)
+		}
+
+		return nil
+	})
+}
+
+// Returns 0 if coverage doesn't stored.
+// Returns error only if coverage retrieving is failed.
+func getCommitCoverage(projectID int, sha string) (float64, error) {
+	var coverageBytes []byte
+	var coverage float64
+
+	err := db.View(func(tx *bolt.Tx) error {
+		projectBucket := tx.Bucket([]byte(fmt.Sprintf("projects:%d", projectID)))
+		if projectBucket == nil {
+			return nil
+		}
+
+		coverageBytes = projectBucket.Get(commitKey(sha))
+		return nil
+	})
+
+	if err != nil {
+		return 0, err
+	}
+
+	if coverageBytes == nil {
+		return 0, nil
+	}
+
+	coverage, err = strconv.ParseFloat(string(coverageBytes), 64)
+	if err != nil {
+		return 0, fmt.Errorf("error while parsing coverage %q from db: %s", coverageBytes, err)
+	}
+
+	return coverage, nil
+}
+
+func commitKey(sha string) []byte {
+	return []byte(fmt.Sprintf("sha:%s", sha))
+}
+
+func handleDiscussionPosting(projectID int, mergeRequestID int, beforeCommitSHA, lastCommitSHA string, log *zerolog.Logger) {
+	coverageBefore, err := getCommitCoverage(projectID, beforeCommitSHA)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get coverage before merge request")
+	}
+	log.Debug().
+		Str("before_sha", beforeCommitSHA).
+		Float64("coverage", coverageBefore).
+		Msg("Coverage before")
+
+	coverageAfter, err := getCommitCoverage(projectID, lastCommitSHA)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get coverage after merge request")
+	}
+	log.Debug().
+		Str("after_sha", lastCommitSHA).
+		Float64("coverage", coverageAfter).
+		Msg("Coverage after")
+
+	postOrUpdateCoverageMessage(projectID, mergeRequestID, coverageBefore, coverageAfter, log)
+}
+
+func postOrUpdateCoverageMessage(projectID, mergeRequestID int, coverageBefore, coverageAfter float64, log *zerolog.Logger) {
+	message := noteMessage(coverageBefore, coverageAfter)
+
+	existingNoteID, err := getNoteID(projectID, mergeRequestID)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get existing note ID")
+	}
+
+	if existingNoteID == 0 {
+		log.Info().Msg("Posting new note")
+
+		noteID, err := postCoverageMessage(projectID, mergeRequestID, message, log)
+		if err != nil {
+			log.Error().Err(err).Msg("Cannot create note on merge request")
+		}
+
+		err = storeNoteID(projectID, mergeRequestID, noteID)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to store new note ID")
+		}
+	} else {
+		log.Info().Int("note_id", existingNoteID).Msg("Modifying existing note")
+
+		err := updateCoverageMessage(projectID, mergeRequestID, existingNoteID, message, log)
+		if err != nil {
+			log.Error().Err(err).Msg("Cannot update note on merge request")
+		}
+	}
+}
+
+func postCoverageMessage(projectID, mergeRequestID int, message string, log *zerolog.Logger) (int, error) {
+	noteOpts := &gitlab.CreateMergeRequestNoteOptions{
+		Body: gitlab.String(message),
+	}
+
+	note, _, err := git.Notes.CreateMergeRequestNote(projectID, mergeRequestID, noteOpts)
+	if err != nil {
+		return 0, err
+	}
+
+	log.Info().
+		Int("note_id", note.ID).
+		Str("note_message", message).
+		Msg("Note created")
+
+	return note.ID, nil
+}
+
+func updateCoverageMessage(projectID, mergeRequestID, noteID int, message string, log *zerolog.Logger) error {
+	noteOpts := &gitlab.UpdateMergeRequestNoteOptions{
+		Body: gitlab.String(message),
+	}
+
+	note, _, err := git.Notes.UpdateMergeRequestNote(projectID, mergeRequestID, noteID, noteOpts)
+	if err != nil {
+		return err
+	}
+
+	log.Info().
+		Int("note_id", note.ID).
+		Str("note_message", message).
+		Msg("Note updated")
+
+	return nil
+}
+
+func noteMessage(coverageBefore, coverageAfter float64) string {
+	var message string
+
+	if coverageBefore == 0 && coverageAfter == 0 {
+		message = "Waiting for coverage info..."
+	} else {
+		coverageBeforeStr := strconv.FormatFloat(coverageBefore, 'f', -1, 64)
+		coverageAfterStr := strconv.FormatFloat(coverageAfter, 'f', -1, 64)
+
+		if coverageAfter > coverageBefore {
+			message = fmt.Sprintf("Coverage is increased from %s%% to %s%%! :thumbsup:",
+				coverageBeforeStr, coverageAfterStr)
+		} else if coverageAfter < coverageBefore {
+			message = fmt.Sprintf("Coverage is decreased from %s%% to %s%% :thumbsdown:",
+				coverageBeforeStr, coverageAfterStr)
+		} else {
+			message = fmt.Sprintf("Coverage is the same: %s%% :muscle:", coverageAfterStr)
+		}
+	}
+
+	return fmt.Sprintf("**Coverage reporter**  \n%s", message)
+}
+
+func storeNoteID(projectID, mergeRequestID, noteID int) error {
+	return storeInMergeRequestBucket(projectID, mergeRequestID, func(mergeRequestBucket *bolt.Bucket) error {
+		err := mergeRequestBucket.Put([]byte("note_id"), []byte(strconv.Itoa(noteID)))
+		if err != nil {
+			return fmt.Errorf("storing note ID error: %s", err)
+		}
+		return nil
+	})
+}
+
+func storeInMergeRequestBucket(projectID int, mergeRequestID int, storeFn func(*bolt.Bucket) error) error {
 	return db.Update(func(tx *bolt.Tx) error {
 		projectBucket, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("projects:%d", projectID)))
 		if err != nil {
@@ -256,16 +431,43 @@ func storeMergeRequestData(projectID int, mergeRequestID int, beforeCommitSHA, l
 			return fmt.Errorf("create bucket: %s", err)
 		}
 
-		err = mergeRequestBucket.Put([]byte("beforeSHA"), []byte(beforeCommitSHA))
-		if err != nil {
-			return fmt.Errorf("storing before commit SHA: %s", err)
+		return storeFn(mergeRequestBucket)
+	})
+}
+
+func getNoteID(projectID, mergeRequestID int) (int, error) {
+	var noteID int
+
+	err := readFromMergeRequestBucket(projectID, mergeRequestID, func(mergeRequestBucket *bolt.Bucket) error {
+		noteIDBytes := mergeRequestBucket.Get([]byte("note_id"))
+		if noteIDBytes == nil {
+			return nil
 		}
 
-		err = mergeRequestBucket.Put([]byte("lastCommitSHA"), []byte(lastCommitSHA))
+		var err error
+		noteID, err = strconv.Atoi(string(noteIDBytes))
 		if err != nil {
-			return fmt.Errorf("storing last commit SHA: %s", err)
+			return err
 		}
 
 		return nil
+	})
+
+	return noteID, err
+}
+
+func readFromMergeRequestBucket(projectID int, mergeRequestID int, readFn func(*bolt.Bucket) error) error {
+	return db.View(func(tx *bolt.Tx) error {
+		projectBucket := tx.Bucket([]byte(fmt.Sprintf("projects:%d", projectID)))
+		if projectBucket == nil {
+			return nil
+		}
+
+		mergeRequestBucket := projectBucket.Bucket([]byte(fmt.Sprintf("mr:%d", mergeRequestID)))
+		if mergeRequestBucket == nil {
+			return nil
+		}
+
+		return readFn(mergeRequestBucket)
 	})
 }
