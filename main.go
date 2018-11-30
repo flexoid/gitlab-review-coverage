@@ -264,16 +264,20 @@ func storeMergeRequestData(projectID int, mergeRequestID int, beforeCommitSHA, l
 // Returns 0 if coverage doesn't stored.
 // Returns error only if coverage retrieving is failed.
 func getCommitCoverage(projectID int, sha string) (float64, error) {
-	var coverageBytes []byte
 	var coverage float64
 
-	err := db.View(func(tx *bolt.Tx) error {
-		projectBucket := tx.Bucket([]byte(fmt.Sprintf("projects:%d", projectID)))
-		if projectBucket == nil {
+	err := readFromCommitBucket(projectID, sha, func(commitBucket *bolt.Bucket) error {
+		coverageBytes := commitBucket.Get([]byte("coverage"))
+		if coverageBytes == nil {
 			return nil
 		}
 
-		coverageBytes = projectBucket.Get(commitKey(sha))
+		var err error
+		coverage, err = strconv.ParseFloat(string(coverageBytes), 64)
+		if err != nil {
+			return fmt.Errorf("error while parsing coverage %q from db: %s", coverageBytes, err)
+		}
+
 		return nil
 	})
 
@@ -281,20 +285,7 @@ func getCommitCoverage(projectID int, sha string) (float64, error) {
 		return 0, err
 	}
 
-	if coverageBytes == nil {
-		return 0, nil
-	}
-
-	coverage, err = strconv.ParseFloat(string(coverageBytes), 64)
-	if err != nil {
-		return 0, fmt.Errorf("error while parsing coverage %q from db: %s", coverageBytes, err)
-	}
-
 	return coverage, nil
-}
-
-func commitKey(sha string) []byte {
-	return []byte(fmt.Sprintf("sha:%s", sha))
 }
 
 func handleDiscussionPosting(projectID int, mergeRequestID int, beforeCommitSHA, lastCommitSHA string, log *zerolog.Logger) {
@@ -388,7 +379,7 @@ func updateCoverageMessage(projectID, mergeRequestID, noteID int, message string
 func noteMessage(coverageBefore, coverageAfter float64) string {
 	var message string
 
-	if coverageBefore == 0 && coverageAfter == 0 {
+	if coverageBefore == 0 || coverageAfter == 0 {
 		message = "Waiting for coverage info..."
 	} else {
 		coverageBeforeStr := strconv.FormatFloat(coverageBefore, 'f', -1, 64)
@@ -469,5 +460,21 @@ func readFromMergeRequestBucket(projectID int, mergeRequestID int, readFn func(*
 		}
 
 		return readFn(mergeRequestBucket)
+	})
+}
+
+func readFromCommitBucket(projectID int, sha string, readFn func(*bolt.Bucket) error) error {
+	return db.View(func(tx *bolt.Tx) error {
+		projectBucket := tx.Bucket([]byte(fmt.Sprintf("projects:%d", projectID)))
+		if projectBucket == nil {
+			return nil
+		}
+
+		commitBucket := projectBucket.Bucket([]byte(fmt.Sprintf("sha:%s", sha)))
+		if commitBucket == nil {
+			return nil
+		}
+
+		return readFn(commitBucket)
 	})
 }
