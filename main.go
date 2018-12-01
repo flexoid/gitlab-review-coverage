@@ -169,6 +169,56 @@ func handleCommitCoverage(projectID int, event *gitlab.BuildEvent, log *zerolog.
 	}
 
 	log.Info().Float64("coverage", coverage).Msg("Coverage is stored")
+
+	log.Debug().Msg("Updating linked merge requests")
+	handleLinkedMergeRequests(projectID, event.Sha, log)
+}
+
+func handleLinkedMergeRequests(projectID int, sha string, log *zerolog.Logger) {
+	var mergeRequestIDs []int
+
+	err := readFromCommitBucket(projectID, sha, func(commitBucket *bolt.Bucket) error {
+		linkedMergeRequestsBucket := commitBucket.Bucket([]byte("mrs"))
+		if linkedMergeRequestsBucket == nil {
+			return nil
+		}
+
+		return linkedMergeRequestsBucket.ForEach(func(mergeRequestIDStr, _ []byte) error {
+			mergeRequestID, _ := strconv.Atoi(string(mergeRequestIDStr))
+			mergeRequestIDs = append(mergeRequestIDs, mergeRequestID)
+			return nil
+		})
+	})
+
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get linked merge requests for commit")
+		return
+	}
+
+	log.Info().
+		Ints("merge_request_ids", mergeRequestIDs).
+		Msg("Got linked MRs")
+
+	for _, mergeRequestID := range mergeRequestIDs {
+		log := log.With().Int("merge_request_id", mergeRequestID).Logger()
+
+		beforeSHA, lastCommitSHA, err := getMergeRequestCommitsData(projectID, mergeRequestID)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to get merge request commits data")
+			continue
+		}
+
+		log.Debug().
+			Str("before_sha", beforeSHA).
+			Str("after_sha", lastCommitSHA).
+			Msg("Got merge request commits data")
+
+		if len(beforeSHA) == 0 || len(lastCommitSHA) == 0 {
+			continue
+		}
+
+		handleDiscussionPosting(projectID, mergeRequestID, beforeSHA, lastCommitSHA, &log)
+	}
 }
 
 func storeCommitCoverage(projectID int, sha string, coverage float64) error {
@@ -445,6 +495,24 @@ func getNoteID(projectID, mergeRequestID int) (int, error) {
 	})
 
 	return noteID, err
+}
+
+func getMergeRequestCommitsData(projectID, mergeRequestID int) (beforeSHA, lastSHA string, err error) {
+	err = readFromMergeRequestBucket(projectID, mergeRequestID, func(mergeRequestBucket *bolt.Bucket) error {
+		sha := mergeRequestBucket.Get([]byte("beforeSHA"))
+		if sha != nil {
+			beforeSHA = string(sha)
+		}
+
+		sha = mergeRequestBucket.Get([]byte("lastCommitSHA"))
+		if sha != nil {
+			lastSHA = string(sha)
+		}
+
+		return nil
+	})
+
+	return
 }
 
 func readFromMergeRequestBucket(projectID int, mergeRequestID int, readFn func(*bolt.Bucket) error) error {
