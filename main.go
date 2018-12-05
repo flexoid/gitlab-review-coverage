@@ -17,8 +17,7 @@ var db *bolt.DB
 var git *gitlab.Client
 
 func main() {
-	zerolog.TimeFieldFormat = ""
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
+	zerolog.TimeFieldFormat = time.RFC3339Nano
 
 	log.Info().Msg("Gitlab Merge Request Coverage reporter")
 
