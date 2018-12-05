@@ -4,8 +4,7 @@ go:
   - "1.11"
 
 env:
-  - DEP_VERSION="0.5.0"
-  - GOLANG_LINT_VERSION="1.12.3"
+  - DEP_VERSION="0.5.0" GOLANG_LINT_VERSION="1.12.3"
 
 before_install:
   - curl -L -s https://github.com/golang/dep/releases/download/v${DEP_VERSION}/dep-linux-amd64 -o $GOPATH/bin/dep
