@@ -57,3 +57,13 @@ which enables great debugging capabilities.
 
 When the webhook event is received, as recommended, all the further processing is performed
 in the separate goroutines to minimize webhook response time.
+
+## Code style and quality
+
+The main purpose of this utility, besides its direct functionality,
+is to practice writing in Go language.
+
+The code is checked by [golangci-lint](https://github.com/golangci/golangci-lint).
+`golangci-lint run` returns no warnings.
+
+Currently there is zero tests written, that's what I want to improve.
