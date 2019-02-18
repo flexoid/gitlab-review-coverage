@@ -129,7 +129,7 @@ func handleMergeRequestEvent(event *gitlab.MergeEvent) {
 func handleBuildEvent(event *gitlab.BuildEvent) {
 	projectID := event.ProjectID
 	jobID := event.BuildID
-	sha := event.Sha
+	sha := event.SHA
 
 	log := log.With().
 		Int("project_id", projectID).
@@ -166,7 +166,7 @@ func handleCommitCoverage(projectID int, event *gitlab.BuildEvent, log *zerolog.
 		return
 	}
 
-	err = storeCommitCoverage(projectID, event.Sha, coverage)
+	err = storeCommitCoverage(projectID, event.SHA, coverage)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to store commit coverage")
 		return
@@ -175,7 +175,7 @@ func handleCommitCoverage(projectID int, event *gitlab.BuildEvent, log *zerolog.
 	log.Info().Float64("coverage", coverage).Msg("Coverage is stored")
 
 	log.Debug().Msg("Updating linked merge requests")
-	handleLinkedMergeRequests(projectID, event.Sha, log)
+	handleLinkedMergeRequests(projectID, event.SHA, log)
 }
 
 func handleLinkedMergeRequests(projectID int, sha string, log *zerolog.Logger) {

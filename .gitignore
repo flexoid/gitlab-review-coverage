@@ -1,4 +1,4 @@
 .idea
 /vendor
 .env
-/gitlab-mr-coverage
+/gitlab-review-coverage
