@@ -2,15 +2,16 @@ package main
 
 import (
 	"fmt"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
-	"github.com/xanzy/go-gitlab"
-	"go.etcd.io/bbolt"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	gitlab "github.com/xanzy/go-gitlab"
+	bolt "go.etcd.io/bbolt"
 )
 
 var db *bolt.DB
@@ -18,6 +19,10 @@ var git *gitlab.Client
 
 func main() {
 	zerolog.TimeFieldFormat = time.RFC3339Nano
+	zerolog.TimestampFunc = func() time.Time {
+		return time.Now().UTC()
+	}
+	zerolog.MessageFieldName = "msg"
 
 	log.Info().Msg("Gitlab Merge Request Coverage reporter")
 
