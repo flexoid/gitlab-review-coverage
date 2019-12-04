@@ -16,7 +16,7 @@ Should work on the more recent versions.
 The following ENV variables must be set:
 
 * `GITLAB_BASE_URL` - Base URL for API calls (e.g. `https://gitlab.com`)
-* `GITLAB_TOKEN` - GitLab API token (e.g. `SR-B7fFehUD91g7ygua`)
+* `GITLAB_TOKEN` - GitLab API token with "api" scope (e.g. `SR-B7fFehUD91g7ygua`)
 * `PORT` - available port on the host system to listen for incoming GitLab webhook
 * `BOLT_DB_PATH` - path to the BoltDB file
 
@@ -25,7 +25,7 @@ The following ENV variables must be set:
 GitLab webhook must be configured on the project.
 
 Webhook URL is the URL to the running instance of this utility, with specified `PORT`.
-Enabled triggers: "Merge Requests Events", "Build Events".
+Enabled triggers: "Merge Requests Events", "Job Events".
 
 Test CI jobs must have configured coverage RegExp.
 

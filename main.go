@@ -101,10 +101,10 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	switch event := event.(type) {
 	case *gitlab.MergeEvent:
 		handleMergeRequestEvent(event)
-	case *gitlab.BuildEvent:
-		handleBuildEvent(event)
+	case *gitlab.JobEvent:
+		handleJobEvent(event)
 	default:
-		log.Debug().Msg("Skipping event type")
+		log.Debug().Msgf("Skipping event type: %T", event)
 	}
 }
 
@@ -126,7 +126,7 @@ func handleMergeRequestEvent(event *gitlab.MergeEvent) {
 	go processMergeRequest(projectID, mergeRequestID, &log)
 }
 
-func handleBuildEvent(event *gitlab.BuildEvent) {
+func handleJobEvent(event *gitlab.JobEvent) {
 	projectID := event.ProjectID
 	jobID := event.BuildID
 	sha := event.SHA
@@ -152,7 +152,7 @@ func handleBuildEvent(event *gitlab.BuildEvent) {
 	go handleCommitCoverage(projectID, event, &log)
 }
 
-func handleCommitCoverage(projectID int, event *gitlab.BuildEvent, log *zerolog.Logger) {
+func handleCommitCoverage(projectID int, event *gitlab.JobEvent, log *zerolog.Logger) {
 	job, _, err := git.Jobs.GetJob(projectID, event.BuildID)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to fetch job")
@@ -278,9 +278,27 @@ func processMergeRequest(projectID int, mergeRequestID int, log *zerolog.Logger)
 		return
 	}
 
+	log.Debug().
+		Interface("commits", commits).
+		Msg("Received merge request commits")
+
 	firstCommit := commits[len(commits)-1]
 	lastCommit := commits[0]
-	commitBeforeMergeRequestSHA := firstCommit.ParentIDs[0]
+
+	// Commits from merge request does not include `parent_ids` because of bug:
+	// https://gitlab.com/gitlab-org/gitlab/issues/35126
+	// Workaround is to request the commit separately.
+	firstCommitSingle, _, err := git.Commits.GetCommit(projectID, firstCommit.ID, nil)
+	log.Debug().
+		Interface("commit", firstCommitSingle).
+		Msg("Received first merge request commit")
+
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to fetch first merge request commit")
+		return
+	}
+
+	commitBeforeMergeRequestSHA := firstCommitSingle.ParentIDs[0]
 
 	err = storeMergeRequestData(projectID, mergeRequestID, commitBeforeMergeRequestSHA, lastCommit.ID)
 	if err != nil {
