@@ -14,6 +14,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+var version string
 var db *bolt.DB
 var git *gitlab.Client
 
@@ -24,7 +25,7 @@ func main() {
 	}
 	zerolog.MessageFieldName = "msg"
 
-	log.Info().Msg("Gitlab Merge Request Coverage reporter")
+	log.Info().Msgf("Gitlab Merge Request Coverage reporter %s", version)
 
 	port := getRequiredEnvVar("PORT")
 	gitlabBaseURL := getRequiredEnvVar("GITLAB_BASE_URL")
