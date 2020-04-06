@@ -283,6 +283,12 @@ func processMergeRequest(projectID int, mergeRequestID int, log *zerolog.Logger)
 		Interface("commits", commits).
 		Msg("Received merge request commits")
 
+	if len(commits) == 0 {
+		log.Debug().
+			Msg("No commits in merge request, stop handling")
+		return
+	}
+
 	firstCommit := commits[len(commits)-1]
 	lastCommit := commits[0]
 
