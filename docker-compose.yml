@@ -11,4 +11,5 @@ services:
       - "31200:3000"
     volumes:
       - ~/.gitlab-mr-coverage:/var/lib/gitlab-mr-coverage
+    restart: unless-stopped
     build: .
